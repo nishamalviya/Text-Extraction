@@ -133,6 +133,8 @@ def _ocr_lines_with_boxes_multi(ocrs: List[PaddleOCR], img: Image.Image) -> List
     return list(merged.values())
 
 
+
+
 def _parse_langs(lang: str) -> List[str]:
     if not lang:
         return ["en"]
@@ -237,10 +239,24 @@ def _tables_from_markdown(md: str) -> List[Dict]:
             current.append(parts)
         else:
             if current:
-                tables.append({"title": "markdown_table", "rows": current})
+                header = current[0] if current else []
+                body = current[1:] if len(current) > 1 else []
+                tables.append(
+                    {
+                        "title": "markdown_table",
+                        "table_grid": {"columns": header, "rows": body},
+                    }
+                )
                 current = []
     if current:
-        tables.append({"title": "markdown_table", "rows": current})
+        header = current[0] if current else []
+        body = current[1:] if len(current) > 1 else []
+        tables.append(
+            {
+                "title": "markdown_table",
+                "table_grid": {"columns": header, "rows": body},
+            }
+        )
     return tables
 
 
@@ -338,6 +354,104 @@ def _tables_from_html(html: str) -> List[Dict]:
             return [label or "", *nums]
         return row
 
+    def _expand_table_rows(table_tag) -> List[List[str]]:
+        rows_out: List[List[str]] = []
+        active_spans: Dict[int, Dict[str, int | str]] = {}
+        for tr in table_tag.find_all("tr"):
+            cells = tr.find_all(["th", "td"])
+            if not cells and not active_spans:
+                continue
+            row_cells: List[str] = []
+            col_idx = 0
+
+            def _fill_span_at(col: int):
+                nonlocal col_idx
+                span = active_spans.get(col)
+                if span:
+                    row_cells.append(str(span["text"]))
+                    span["rows_left"] -= 1
+                    if span["rows_left"] <= 0:
+                        active_spans.pop(col, None)
+                    col_idx += 1
+                    return True
+                return False
+
+            for cell in cells:
+                while _fill_span_at(col_idx):
+                    pass
+                import html as _html
+                text = _html.unescape(cell.get_text(" ", strip=True))
+                colspan = int(cell.get("colspan", 1) or 1)
+                rowspan = int(cell.get("rowspan", 1) or 1)
+                for i in range(colspan):
+                    row_cells.append(text)
+                    if rowspan > 1:
+                        active_spans[col_idx + i] = {"text": text, "rows_left": rowspan - 1}
+                col_idx += colspan
+
+            if active_spans:
+                max_col = max(active_spans.keys())
+                while col_idx <= max_col:
+                    if not _fill_span_at(col_idx):
+                        row_cells.append("")
+                        col_idx += 1
+
+            if row_cells:
+                if any(("total" in (c or "").lower() or "net amount" in (c or "").lower() or "deduction" in (c or "").lower()) for c in row_cells):
+                    rows_out.append(_clean_total_row(row_cells))
+                else:
+                    rows_out.append(row_cells)
+        return rows_out
+
+    def _expand_table_rows(table_tag) -> List[List[str]]:
+        rows_out: List[List[str]] = []
+        active_spans: Dict[int, Dict[str, int | str]] = {}
+        for tr in table_tag.find_all("tr"):
+            cells = tr.find_all(["th", "td"])
+            if not cells and not active_spans:
+                continue
+            row_cells: List[str] = []
+            col_idx = 0
+
+            def _fill_span_at(col: int):
+                nonlocal col_idx
+                span = active_spans.get(col)
+                if span:
+                    row_cells.append(str(span["text"]))
+                    span["rows_left"] -= 1
+                    if span["rows_left"] <= 0:
+                        active_spans.pop(col, None)
+                    col_idx += 1
+                    return True
+                return False
+
+            for cell in cells:
+                while _fill_span_at(col_idx):
+                    pass
+                import html as _html
+                text = _html.unescape(cell.get_text(" ", strip=True))
+                colspan = int(cell.get("colspan", 1) or 1)
+                rowspan = int(cell.get("rowspan", 1) or 1)
+                for i in range(colspan):
+                    row_cells.append(text)
+                    if rowspan > 1:
+                        active_spans[col_idx + i] = {"text": text, "rows_left": rowspan - 1}
+                col_idx += colspan
+
+            if active_spans:
+                max_col = max(active_spans.keys())
+                while col_idx <= max_col:
+                    if not _fill_span_at(col_idx):
+                        row_cells.append("")
+                        col_idx += 1
+
+            if row_cells:
+                if any(("total" in (c or "").lower() or "net amount" in (c or "").lower() or "deduction" in (c or "").lower()) for c in row_cells):
+                    rows_out.append(_clean_total_row(row_cells))
+                else:
+                    rows_out.append(row_cells)
+        return rows_out
+
     def _normalize_table_rows(rows: List[List[str]]) -> List[List[str]]:
         if not rows:
             return rows
@@ -368,6 +482,21 @@ def _tables_from_html(html: str) -> List[Dict]:
                 return i
         return -1
 
+    def _looks_like_grid(rows: List[List[str]]) -> bool:
+        if len(rows) < 2:
+            return False
+        max_cols = max(len(r) for r in rows)
+        if max_cols < 3:
+            return False
+        dense_rows = 0
+        for r in rows:
+            non_empty = [c for c in r if c.strip()]
+            if len(non_empty) >= 3:
+                dense_rows += 1
+        if dense_rows >= 2:
+            return True
+        return False
+
     def _is_header_like(row: List[str]) -> bool:
         cells = [c.strip() for c in row if c.strip()]
         if not cells:
@@ -375,7 +504,7 @@ def _tables_from_html(html: str) -> List[Dict]:
         avg_len = sum(len(c) for c in cells) / len(cells)
         has_colon = any(":" in c for c in cells)
         numeric_cells = sum(1 for c in cells if c.replace("/", "").replace("-", "").isdigit())
-        return avg_len <= 24 and numeric_cells == 0 and not has_colon and len(cells) >= 2
+        return avg_len <= 60 and numeric_cells == 0 and not has_colon and len(cells) >= 2
 
     def _header_block(rows: List[List[str]], idx_row: int) -> List[List[str]]:
         if idx_row <= 0:
@@ -531,6 +660,14 @@ def _tables_from_html(html: str) -> List[Dict]:
                         best = (pci, plabel, pcount, pavg)
             if best:
                 columns[nci], columns[best[0]] = columns[best[0]], columns[nci]
+        if not narrative_cols and placeholder_cols:
+            best = None
+            for pci, plabel, pcount, pavg in placeholder_cols:
+                if pavg > 40 and pcount > 0:
+                    if best is None or pavg > best[3]:
+                        best = (pci, plabel, pcount, pavg)
+            if best:
+                columns[best[0]] = "Narration"
         return columns
 
     def _drop_blank_cells(columns: List[str], rows: List[List[str]]) -> (List[str], List[List[str]]):
@@ -543,23 +680,62 @@ def _tables_from_html(html: str) -> List[Dict]:
         return new_cols, new_rows
 
     for t in soup.find_all("table"):
-        rows = []
-        for tr in t.find_all("tr"):
-            cells = []
-            for cell in tr.find_all(["th", "td"]):
+        th_row_idx = None
+        th_cells_text = None
+        trs = t.find_all("tr")
+        for idx, tr in enumerate(trs):
+            ths = tr.find_all("th")
+            if ths:
+                th_row_idx = idx
                 import html as _html
-                cells.append(_html.unescape(cell.get_text(" ", strip=True)))
-            if cells:
-                if any(("total" in (c or "").lower() or "net amount" in (c or "").lower() or "deduction" in (c or "").lower()) for c in cells):
-                    rows.append(_clean_total_row(cells))
-                else:
-                    rows.append(cells)
+                th_cells_text = [_html.unescape(cell.get_text(" ", strip=True)) for cell in ths]
+                break
+        if th_cells_text:
+            data_rows: List[List[str]] = []
+            for tr in trs[th_row_idx + 1 :]:
+                tds = tr.find_all(["td"])
+                if not tds:
+                    continue
+                row_cells: List[str] = []
+                for td in tds:
+                    import html as _html
+                    text = _html.unescape(td.get_text(" ", strip=True))
+                    colspan = int(td.get("colspan", 1) or 1)
+                    row_cells.append(text)
+                    if colspan > 1:
+                        row_cells.extend([""] * (colspan - 1))
+                data_rows.append(row_cells)
+            rows = [th_cells_text] + data_rows
+        else:
+            rows = _expand_table_rows(t)
         rows = _normalize_table_rows(rows)
         if rows:
             idx_row = _find_index_row(rows)
-            if idx_row >= 0:
-                columns = _build_columns(rows, idx_row)
-                data_rows = rows[idx_row + 1 :]
+            looks_grid = _looks_like_grid(rows)
+            if idx_row >= 0 or looks_grid or th_row_idx is not None:
+                if idx_row < 0:
+                    idx_row = th_row_idx if th_row_idx is not None else 0
+                if th_cells_text and len([c for c in th_cells_text if c.strip()]) >= 2:
+                    columns = [c.strip() if c.strip() else f"col_{i+1}" for i, c in enumerate(th_cells_text)]
+                    data_rows = rows[th_row_idx + 1 :] if th_row_idx is not None else rows[idx_row + 1 :]
+                elif th_row_idx is not None and th_row_idx < len(rows):
+                    header_candidate = rows[th_row_idx]
+                    if sum(1 for c in header_candidate if c.strip()) >= 2:
+                        columns = [c.strip() if c.strip() else f"col_{i+1}" for i, c in enumerate(header_candidate)]
+                        data_rows = rows[th_row_idx + 1 :]
+                    else:
+                        columns = _build_columns(rows, idx_row)
+                        data_rows = rows[idx_row + 1 :]
+                else:
+                    columns = _build_columns(rows, idx_row)
+                    data_rows = rows[idx_row + 1 :]
+                if columns and sum(1 for c in columns if c.startswith("col_")) >= (len(columns) // 2):
+                    header_candidate = rows[idx_row] if idx_row < len(rows) else []
+                    non_empty = [c for c in header_candidate if c.strip()]
+                    numeric_cells = sum(1 for c in non_empty if c.replace("/", "").replace("-", "").isdigit())
+                    if non_empty and numeric_cells <= max(1, len(non_empty) // 3):
+                        columns = [c.strip() if c.strip() else f"col_{i+1}" for i, c in enumerate(header_candidate)]
+                        data_rows = rows[idx_row + 1 :]
                 columns, data_rows = _trim_empty_columns(columns, data_rows)
                 columns, data_rows = _drop_sparse_columns(columns, data_rows)
                 data_rows = _trim_row_trailing_blanks(data_rows)
@@ -1181,7 +1357,16 @@ async def _mistral_ocr(data: bytes, filename: str) -> Dict:
         resp = await client.post("https://api.mistral.ai/v1/ocr", json=payload, headers=headers)
         if resp.status_code >= 400:
             raise HTTPException(status_code=resp.status_code, detail=resp.text)
-        return resp.json()
+        data_json = resp.json()
+        if os.getenv("MISTRAL_SAVE_RAW", "").lower() in {"1", "true", "yes"}:
+            out_name = (filename or "mistral") + ".mistral.raw.json"
+            try:
+                with open(out_name, "w", encoding="utf-8") as f:
+                    import json
+                    json.dump(data_json, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+        return data_json
 
 
 def _doctr_lines_from_pdf(data: bytes) -> List[List[Dict]]:
@@ -1336,6 +1521,19 @@ async def _ocr_file(
                     tables.extend(_tables_from_html(rt.get("content", "")))
             if not tables:
                 tables = _tables_from_markdown(md)
+            else:
+                md_tables = _tables_from_markdown(md)
+                if md_tables:
+                    for idx, t in enumerate(tables):
+                        grid = t.get("table_grid")
+                        if not grid:
+                            continue
+                        cols = grid.get("columns", [])
+                        if not cols:
+                            continue
+                        if sum(1 for c in cols if c.startswith("col_")) >= max(1, len(cols) // 2):
+                            if idx < len(md_tables):
+                                tables[idx] = md_tables[idx]
             if not header_kv and tables:
                 derived = []
                 for t in tables:
