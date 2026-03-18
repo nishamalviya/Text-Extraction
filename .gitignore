@@ -1,0 +1,16 @@
+/.venv
+main copy 2.py
+main copy.py
+main copy 3.py
+DOC-18.mistral.clean.md
+DOC-18.mistral.cleaned.json
+DOC-18.mistral.raw.json
+DOC-18.page1.png
+DOC-18.pdf
+DOC-18.table.rows.json
+DOC-18.table.rows.subset.json
+DOC-18.table.rows.txt
+main copy 4.py
+test_ui.py
+*.pyc
+*.rar

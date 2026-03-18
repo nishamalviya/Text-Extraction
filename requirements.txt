@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+paddlepaddle==2.6.2
+paddleocr==2.8.1
+pillow
+pymupdf
+python-docx
+numpy
+python-multipart
+beautifulsoup4
+streamlit
