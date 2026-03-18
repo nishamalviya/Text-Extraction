@@ -1143,9 +1143,9 @@ def _doctr_available() -> bool:
 
 
 def _mistral_key() -> str:
-    key = os.getenv("MISTRAL_API_KEY", "").strip()
+    key = "MgLlbypqBJPSjVxrpWwRHqxSSjCcKkYO"
     if not key:
-        raise HTTPException(status_code=500, detail="Mistral API key missing. Set MISTRAL_API_KEY env var.")
+        raise HTTPException(status_code=500, detail="Error processing")
     return key
 
 
@@ -1503,7 +1503,7 @@ async def _ocr_file(
     raise HTTPException(status_code=400, detail="Unsupported file type. Use PDF, DOCX, or image files.")
 
 
-@app.post("/extract-text")
+@app.post("/extract-text", include_in_schema=False)
 async def extract_text(file: UploadFile = File(...)):
     return await _ocr_file(
         file=file,
